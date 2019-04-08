@@ -19,7 +19,7 @@ class BinanceClient extends EventEmitter {
     this._tradeSubs = new Map();
     this._level2SnapshotSubs = new Map();
     this._level2UpdateSubs = new Map();
-    this._wss = undefined;
+    this._wss = [];
     this._reconnectDebounce = undefined;
 
     this.requestSnapshot = requestSnapshot;
@@ -117,10 +117,12 @@ class BinanceClient extends EventEmitter {
    * Close the underlying connction, which provides a way to reset the things
    */
   _close() {
-    if (this._wss) {
-      this._wss.close();
-      this._wss = undefined;
+    if (this._wss.length > 0) {
+      for (const wss of this._wss) {
+        wss.close();
+      }
       this.emit("closed");
+      this._wss = [];
     }
   }
 
@@ -128,7 +130,7 @@ class BinanceClient extends EventEmitter {
    * the subscribed markets.
    */
   _connect() {
-    if (!this._wss) {
+    if (this._wss.length === 0) {
       let streams = [].concat(
         Array.from(this._tradeSubs.keys()).map(
           p => p + (this.useAggTrades ? "@aggTrade" : "@trade")
@@ -136,17 +138,33 @@ class BinanceClient extends EventEmitter {
         Array.from(this._level2SnapshotSubs.keys()).map(p => p + "@depth20"),
         Array.from(this._level2UpdateSubs.keys()).map(p => p + "@depth")
       );
+
       if (this._tickerSubs.size > 0) {
         streams.push("!ticker@arr");
       }
 
-      let wssPath = "wss://stream.binance.com:9443/stream?streams=" + streams.join("/");
-
-      this._wss = new SmartWss(wssPath);
-      this._wss.on("message", this._onMessage.bind(this));
-      this._wss.on("open", this._onConnected.bind(this));
-      this._wss.on("disconnected", this._onDisconnected.bind(this));
-      this._wss.connect();
+      const chunks = streams.reduce((resultArray, item, index) => { 
+        const chunkIndex = Math.floor(index / 20);
+      
+        if(!resultArray[chunkIndex]) {
+          resultArray[chunkIndex] = [];
+        }
+      
+        resultArray[chunkIndex].push(item);
+      
+        return resultArray;
+      }, []);
+      
+      for (const chunk of chunks) {
+        const wssPath = "wss://stream.binance.com:9443/stream?streams=" + chunk.join("/");
+        const wss = new SmartWss(wssPath);
+        wss.on("message", this._onMessage.bind(this));
+        wss.on("open", this._onConnected.bind(this));
+        wss.on("disconnected", this._onDisconnected.bind(this));
+        wss.connect();
+  
+        this._wss.push(wss);
+      }
     }
   }
 
